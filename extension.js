@@ -1,75 +1,63 @@
 import St from "gi://St"
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import Gio from "gi://Gio"
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
-export default class extends Extension {
-    _monitorListener = null
-    _bindHandle = null
+const CORNERS = ['tl', 'tr', 'bl', 'br']
 
-    constructor(metadata) {
-        super(metadata)
-        this.corners = {}
-    }
-
+export default class RoundedCornersExtension extends Extension {
     enable() {
-        this._settings = this.getSettings();
-        this._bindHandle = this._settings.connect('changed::corner-radius', () => this.drawCorners())
-        this._monitorListener = Gio.DBus.session.signal_subscribe(
-            'org.gnome.Mutter.DisplayConfig',
-            'org.gnome.Mutter.DisplayConfig',
-            'MonitorsChanged',
-            '/org/gnome/Mutter/DisplayConfig',
-            null,
-            Gio.DBusSignalFlags.NONE,
-            () => this.drawCorners()
-        )
-        this.drawCorners()
+        this._corners = []
+        this._settings = this.getSettings()
+        this._settings.connectObject('changed::corner-radius', () => this._drawCorners(), this)
+        // Fires after the layout manager has updated its monitor list.
+        Main.layoutManager.connectObject('monitors-changed', () => this._drawCorners(), this)
+        this._drawCorners()
     }
 
     disable() {
-        this.destroyCorners()
-        if (this._monitorListener) Gio.DBus.session.signal_unsubscribe(this._monitorListener)
-        this._settings.disconnect(this._bindHandle)
+        Main.layoutManager.disconnectObject(this)
+        this._settings?.disconnectObject(this)
         this._settings = null
+        this._destroyCorners()
+        this._corners = null
     }
 
-    drawCorners() {
+    _drawCorners() {
+        this._destroyCorners()
+
         const radius = this._settings.get_int('corner-radius')
-        const cornerDir = this.dir.get_child('corners').get_path();
-        this.destroyCorners()
+        const cornerDir = this.dir.get_child('corners').get_path()
 
-        for (let monitor of Main.layoutManager.monitors) {
-            let geometryScale = monitor.geometry_scale || 1
+        for (const monitor of Main.layoutManager.monitors) {
+            const size = (monitor.geometry_scale || 1) * radius
 
-            for (let corner of ['tl', 'tr', 'bl', 'br']) {
-                let x = monitor.x + ((corner[1] == 'l') ? 0 : monitor.width - geometryScale*radius)
-                let y = monitor.y + ((corner[0] == 't') ? 0 : monitor.height - geometryScale*radius)
+            for (const corner of CORNERS) {
+                const x = monitor.x + (corner[1] === 'l' ? 0 : monitor.width - size)
+                const y = monitor.y + (corner[0] === 't' ? 0 : monitor.height - size)
 
-                let cornerDecoration = this.corners[`${monitor.index}-${corner}`] = new St.Bin({
-                    style_class: `corner-decoration corner-{${corner}}`,
+                const actor = new St.Bin({
+                    style_class: `corner-decoration corner-${corner}`,
                     reactive: false,
-                    x, y,
-                    width: geometryScale*radius,
-                    height: geometryScale*radius,
                     can_focus: false,
                     track_hover: false,
+                    x, y,
+                    width: size,
+                    height: size,
                     style: `
                         background-image: url("${cornerDir}/corner-${corner}.svg");
                         background-size: contain;
-                    `
+                    `,
                 })
 
-                Main.uiGroup.add_child(cornerDecoration)
+                Main.uiGroup.add_child(actor)
+                this._corners.push(actor)
             }
         }
     }
 
-    destroyCorners() {
-        for (let corner of Object.values(this.corners)) {
-            corner.destroy()
-        }
-        this.corners = {}
+    _destroyCorners() {
+        for (const actor of this._corners ?? [])
+            actor.destroy()
+        this._corners = []
     }
 }
-
