@@ -1,1 +1,2 @@
-*.zip_build/
+*.zip
+_build/
